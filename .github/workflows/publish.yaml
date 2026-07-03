@@ -24,31 +24,35 @@ jobs:
       - name: Checkout do código
         uses: actions/checkout@v4
         with:
-          fetch-depth: 2 # Permite comparar o commit atual com o anterior
+          fetch-depth: 0 # Mantém para garantir o histórico local das tags
 
       - name: Verificar caminhos alterados
         id: set-matrix
         run: |
           APPS=()
 
-          # Se for o primeiro push da branch, o 'before' pode ser zerado.
-          # Caso seja zerado, comparamos com o commit anterior (HEAD~1), caso contrário usamos o intervalo do push.
-          if [ "${{ github.event.before }}" = "0000000000000000000000000000000000000000" ]; then
-            DIFF_REF="HEAD~1 HEAD"
-          else
-            DIFF_REF="${{ github.event.before }} ${{ github.event.after }}"
+          # Captura com precisão o número de commits incluídos NESTE push específico
+          COMMIT_COUNT=$(echo "${{ github.event.commits && github.event.commits || '' }}" | jq '. | length' 2>/dev/null || echo "1")
+
+          # Se por algum motivo o contador falhar ou der 0, assume 1 commit padrão
+          if [ "$COMMIT_COUNT" -eq 0 ]; then
+            COMMIT_COUNT=1
           fi
 
-          echo "Analisando diff para o intervalo: $DIFF_REF"
+          echo "Total de commits incluídos no push: $COMMIT_COUNT"
 
-          # Verifica se houve mudanças em cada pasta específica
+          # Define o intervalo seguro usando referências HEAD relativas (ex: HEAD~3 HEAD)
+          DIFF_REF="HEAD~$COMMIT_COUNT HEAD"
+          echo "Analisando diff para o intervalo seguro: $DIFF_REF"
+
+          # Executa o diff usando as referências locais que o runner com certeza conhece
           git diff --name-only $DIFF_REF | grep -q "^dbt-runner/" && APPS+=('"dbt-runner"')
           git diff --name-only $DIFF_REF | grep -q "^goose-runner/" && APPS+=('"goose-runner"')
           git diff --name-only $DIFF_REF | grep -q "^lightrag-langfuse/" && APPS+=('"lightrag-langfuse"')
           git diff --name-only $DIFF_REF | grep -q "^mcp-server-qdrant/" && APPS+=('"mcp-server-qdrant"')
           git diff --name-only $DIFF_REF | grep -q "^qa-indexer/" && APPS+=('"qa-indexer"')
 
-          echo "APPS: $APPS"
+          echo "APPS detectados: ${APPS[@]}"
 
           if [ ${#APPS[@]} -gt 0 ]; then
             MATRIX_JSON="[$(echo ${APPS[@]} | sed 's/ /,/g')]"
@@ -56,7 +60,6 @@ jobs:
           else
             echo "matrix=[]" >> $GITHUB_OUTPUT
           fi
-
   # JOB 2: Calcula a versão automaticamente e faz o Build/Push
   build-and-push:
     needs: detect-changes
