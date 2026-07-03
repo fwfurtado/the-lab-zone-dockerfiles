@@ -1,5 +1,10 @@
 FROM debian:bookworm-slim
 
+LABEL org.opencontainers.image.title="goose-runner" \
+      org.opencontainers.image.authors="Mimi <fwfurtado@gmail.com>" \
+      org.opencontainers.image.vendor="The Lab Zone" \
+      org.opencontainers.image.licenses="MIT"
+
 ARG GOOSE_VERSION=v3.24.1
 
 RUN apt-get update -q \
