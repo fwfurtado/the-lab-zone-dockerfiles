@@ -1,0 +1,96 @@
+name: Build, Versionamento e Push para o GHCR
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'dbt-runner/**'
+      - 'goose-runner/**'
+      - 'lightrag-langfuse/**'
+      - 'mcp-server-qdrant/**'
+      - 'qa-indexer/**'
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  # JOB 1: Detecta quais pastas mudaram para evitar builds desnecessários
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Checkout do código
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2 # Permite comparar o commit atual com o anterior
+
+      - name: Verificar caminhos alterados
+        id: set-matrix
+        run: |
+          # Cria uma lista vazia para nossa matriz
+          APPS=()
+
+          # Verifica se houve mudanças em cada pasta específica
+          git diff --name-only HEAD^ HEAD | grep -q "^dbt-runner/" && APPS+=('"dbt-runner"')
+          git diff --name-only HEAD^ HEAD | grep -q "^goose-runner/" && APPS+=('"goose-runner"')
+          git diff --name-only HEAD^ HEAD | grep -q "^lightrag-langfuse/" && APPS+=('"lightrag-langfuse"')
+          git diff --name-only HEAD^ HEAD | grep -q "^mcp-server-qdrant/" && APPS+=('"mcp-server-qdrant"')
+          git diff --name-only HEAD^ HEAD | grep -q "^qa-indexer/" && APPS+=('"qa-indexer"')
+
+          # Se algo mudou, monta o JSON da matriz para o próximo Job
+          if [ ${#APPS[@]} -gt 0 ]; then
+            # Junta os apps separados por vírgula dentro de colchetes
+            MATRIX_JSON="[$(echo ${APPS[@]} | sed 's/ /,/g')]"
+            echo "matrix=$MATRIX_JSON" >> $GITHUB_OUTPUT
+          else
+            echo "matrix=[]" >> $GITHUB_OUTPUT
+          fi
+
+  # JOB 2: Calcula a versão automaticamente e faz o Build/Push
+  build-and-push:
+    needs: detect-changes
+    if: ${{ needs.detect-changes.outputs.matrix != '[]' }} # Só roda se houver mudanças
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Permite que a ferramenta crie tags de versão no Git
+      packages: write # Permite publicar no GHCR
+
+    strategy:
+      matrix:
+        image_name: ${{ fromJson(needs.detect-changes.outputs.matrix) }}
+
+    steps:
+      - name: Checkout do código
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Necessário histórico completo para calcular a versão com precisão
+
+      - name: Calcular Próxima Versão Automaticamente
+        id: semver
+        uses: amodm/conventional-commits-semver-release@v1
+        with:
+          # Filtra os commits para olhar apenas as mensagens que mencionam a pasta do app
+          # Exemplo de commit esperado: "feat(imagem-app-1): nova feature"
+          tag-prefix: "${{ matrix.image_name }}-v"
+
+      - name: Login no GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build e Push da Imagem
+        uses: docker/build-push-action@v6
+        with:
+          context: ./${{ matrix.image_name }}
+          file: ./${{ matrix.image_name }}/Dockerfile
+          push: true
+          # Usa a tag calculada pela ferramenta e atualiza a latest
+          tags: |
+            ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image_name }}:${{ steps.semver.outputs.version }}
+            ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image_name }}:latest
+          labels: |
+            org.opencontainers.image.source=https://github.com{{ github.repository }}
