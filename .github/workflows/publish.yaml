@@ -42,11 +42,11 @@ jobs:
           echo "Analisando diff para o intervalo: $DIFF_REF"
 
           # Verifica se houve mudanças em cada pasta específica
-          git diff --name-only HEAD^ HEAD | grep -q "^dbt-runner/" && APPS+=('"dbt-runner"')
-          git diff --name-only HEAD^ HEAD | grep -q "^goose-runner/" && APPS+=('"goose-runner"')
-          git diff --name-only HEAD^ HEAD | grep -q "^lightrag-langfuse/" && APPS+=('"lightrag-langfuse"')
-          git diff --name-only HEAD^ HEAD | grep -q "^mcp-server-qdrant/" && APPS+=('"mcp-server-qdrant"')
-          git diff --name-only HEAD^ HEAD | grep -q "^qa-indexer/" && APPS+=('"qa-indexer"')
+          git diff --name-only $DIFF_REF | grep -q "^dbt-runner/" && APPS+=('"dbt-runner"')
+          git diff --name-only $DIFF_REF | grep -q "^goose-runner/" && APPS+=('"goose-runner"')
+          git diff --name-only $DIFF_REF | grep -q "^lightrag-langfuse/" && APPS+=('"lightrag-langfuse"')
+          git diff --name-only $DIFF_REF | grep -q "^mcp-server-qdrant/" && APPS+=('"mcp-server-qdrant"')
+          git diff --name-only $DIFF_REF | grep -q "^qa-indexer/" && APPS+=('"qa-indexer"')
 
           echo "APPS: $APPS"
 
@@ -104,4 +104,6 @@ jobs:
             ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image_name }}:${{ steps.semver.outputs.version }}
             ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image_name }}:latest
           labels: |
-            org.opencontainers.image.source=https://github.com{{ github.repository }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ steps.semver.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
