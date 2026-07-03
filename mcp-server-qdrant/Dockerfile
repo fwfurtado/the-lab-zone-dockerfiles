@@ -1,5 +1,10 @@
 FROM python:3.12-slim
 
+LABEL org.opencontainers.image.title="mcp-server-qdrant" \
+      org.opencontainers.image.authors="Mimi <fwfurtado@gmail.com>" \
+      org.opencontainers.image.vendor="The Lab Zone" \
+      org.opencontainers.image.licenses="MIT"
+
 RUN pip install --no-cache-dir mcp-server-qdrant
 
 ENV FASTEMBED_CACHE_PATH=/opt/models
