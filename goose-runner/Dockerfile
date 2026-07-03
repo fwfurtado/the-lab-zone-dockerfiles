@@ -1,6 +1,3 @@
-# just docker build-and-push --app-name goose-runner [--tag "<TAG>" | default "latest" ]   # -> pinar em chart/values.yaml
-#
-# Tag não é contrato; o digest é.
 FROM debian:bookworm-slim
 
 ARG GOOSE_VERSION=v3.24.1
