@@ -29,8 +29,17 @@ jobs:
       - name: Verificar caminhos alterados
         id: set-matrix
         run: |
-          # Cria uma lista vazia para nossa matriz
           APPS=()
+
+          # Se for o primeiro push da branch, o 'before' pode ser zerado.
+          # Caso seja zerado, comparamos com o commit anterior (HEAD~1), caso contrário usamos o intervalo do push.
+          if [ "${{ github.event.before }}" = "0000000000000000000000000000000000000000" ]; then
+            DIFF_REF="HEAD~1 HEAD"
+          else
+            DIFF_REF="${{ github.event.before }} ${{ github.event.after }}"
+          fi
+
+          echo "Analisando diff para o intervalo: $DIFF_REF"
 
           # Verifica se houve mudanças em cada pasta específica
           git diff --name-only HEAD^ HEAD | grep -q "^dbt-runner/" && APPS+=('"dbt-runner"')
@@ -39,9 +48,9 @@ jobs:
           git diff --name-only HEAD^ HEAD | grep -q "^mcp-server-qdrant/" && APPS+=('"mcp-server-qdrant"')
           git diff --name-only HEAD^ HEAD | grep -q "^qa-indexer/" && APPS+=('"qa-indexer"')
 
-          # Se algo mudou, monta o JSON da matriz para o próximo Job
+          echo "APPS: $APPS"
+
           if [ ${#APPS[@]} -gt 0 ]; then
-            # Junta os apps separados por vírgula dentro de colchetes
             MATRIX_JSON="[$(echo ${APPS[@]} | sed 's/ /,/g')]"
             echo "matrix=$MATRIX_JSON" >> $GITHUB_OUTPUT
           else
