@@ -69,7 +69,9 @@ jobs:
 
       - name: Calcular Próxima Versão Automaticamente
         id: semver
-        uses: amodm/conventional-commits-semver-release@v1
+        uses: grumpy-programmer/conventional-commits-semver-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           # Filtra os commits para olhar apenas as mensagens que mencionam a pasta do app
           # Exemplo de commit esperado: "feat(imagem-app-1): nova feature"
