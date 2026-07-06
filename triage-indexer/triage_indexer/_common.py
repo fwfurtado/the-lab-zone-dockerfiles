@@ -46,6 +46,9 @@ class Config:
     globs: list[str]
     batch: int
     run_id: str
+    # Caminho do arquivo de contagem (output do step Argo). Configurável para
+    # gestalt e facets no MESMO pod (containerSet) não colidirem no mesmo arquivo.
+    count_path: str
     # Campos do payload que ganham índice no Qdrant (habilitam filtro do Tier 0/1).
     payload_indexes: dict[str, models.PayloadSchemaType]
 
@@ -63,6 +66,7 @@ class Config:
             globs=os.environ.get("DOC_GLOBS", "**/*.md").split(","),
             batch=int(os.environ.get("EMBED_BATCH", "8")),
             run_id=datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"),
+            count_path=os.environ.get("INDEXED_COUNT_PATH", "/workspace/indexed_count"),
             payload_indexes=payload_indexes,
         )
 
@@ -240,7 +244,7 @@ async def reconcile(cfg: Config, build_points: BuildPoints) -> int:
         # limpar tudo. Na primeira run (recém-criada) 0 é legítimo.
         if recreate:
             print("[indexer] 0 pontos na primeira run (corpus vazio); ok", flush=True)
-            _write_count(0)
+            _write_count(cfg.count_path, 0)
             return 0
         print("[indexer] ERRO: 0 pontos com collection populada — fonte vazia? Abortando", flush=True)
         sys.exit(1)
@@ -274,13 +278,13 @@ async def reconcile(cfg: Config, build_points: BuildPoints) -> int:
     )
     print(f"[indexer] GC ok; run corrente {cfg.run_id}", flush=True)
 
-    _write_count(total)
+    _write_count(cfg.count_path, total)
     return total
 
 
-def _write_count(n: int) -> None:
+def _write_count(path: str, n: int) -> None:
     try:
-        with open("/workspace/indexed_count", "w") as f:
+        with open(path, "w") as f:
             f.write(str(n))
     except OSError:
         pass  # fora do Argo (teste local) não há /workspace; não é erro
