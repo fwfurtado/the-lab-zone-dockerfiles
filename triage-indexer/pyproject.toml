@@ -1,0 +1,23 @@
+[project]
+name = "triage-indexer"
+version = "0.2.0"
+description = "Indexadores da memória de triagens (Fase D): gestalt e facets"
+requires-python = ">=3.12"
+dependencies = [
+    "qdrant-client>=1.12",
+    "mcp-server-qdrant>=0.2",  # reusa o FastEmbedProvider/e5-large da imagem base
+    "mistune>=3.0",            # parser de markdown, só o facets usa
+]
+
+[project.scripts]
+# Dois entrypoints: cada step do Argo chama o comando do seu modo. O comando no
+# manifesto já diz qual modo é — observabilidade sem ler env/log.
+triage-index-gestalt = "triage_indexer.gestalt:main"
+triage-index-facets = "triage_indexer.facets:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["triage_indexer*"]

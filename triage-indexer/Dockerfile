@@ -7,9 +7,18 @@ LABEL org.opencontainers.image.title="triage-indexer" \
 
 USER root
 
-COPY index.py /app/index.py
+WORKDIR /app
+COPY pyproject.toml README.md ./
+COPY triage_indexer/ ./triage_indexer/
 
-# Mesmo cache de modelos do qa-indexer: FastEmbed (e5-large) roda local, sem rede.
+# Instala o pacote e suas deps (mistune; qdrant-client e mcp-server-qdrant já
+# vêm da imagem base). Expõe os dois console-scripts:
+#   triage-index-gestalt  -> collection triage_incidents
+#   triage-index-facets   -> collection triage_facets
+RUN pip install --no-cache-dir .
+
+# Mesmo cache de modelos da base: FastEmbed (e5-large) roda local, sem rede.
 ENV FASTEMBED_CACHE_PATH=/opt/models
 
-ENTRYPOINT ["python", "/app/index.py"]
+# Sem ENTRYPOINT fixo: cada step do Argo escolhe o comando (gestalt|facets).
+CMD ["triage-index-gestalt"]
