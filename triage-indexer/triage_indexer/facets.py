@@ -58,38 +58,56 @@ def _normalize(s: str) -> str:
     return " ".join(words)
 
 
-def _heading_text(node: dict) -> str:
-    return "".join(c.get("raw", "") for c in node.get("children", []) if c.get("type") == "text")
+def _fenced_line_ranges(body: str) -> list[tuple[int, int]]:
+    """Intervalos [início, fim) de linhas cobertas por code fences (```), via
+    AST do mistune. É o ÚNICO caso em que uma linha '## x' não é heading e a
+    regex de linha erraria — então é só disso que precisamos do parser.
 
-
-def _real_headings(body: str) -> list[tuple[int, str]]:
-    """Sequência de headings REAIS (nível, texto) via AST — na ordem do documento.
-
-    Usa o mistune para não confundir '## x' dentro de code fence com heading.
-    Só níveis 1-2 são fronteiras de seção de topo; níveis 3+ ficam DENTRO da
-    seção de topo corrente (aninhamento preservado), então não entram aqui.
+    O mistune 3.x não dá offset de linha nos nós, mas o texto cru de cada
+    block_code está em node['raw']; localizamos esse bloco no corpo para saber
+    quais linhas ele ocupa.
     """
-    out = []
+    ranges: list[tuple[int, int]] = []
+    lines = body.splitlines()
+    search_from = 0
     for node in _md_ast(body):
-        if node.get("type") == "heading" and node.get("attrs", {}).get("level", 99) <= 2:
-            out.append((node["attrs"]["level"], _heading_text(node).strip()))
-    return out
+        if node.get("type") != "block_code":
+            continue
+        raw = node.get("raw", "")
+        # As linhas do conteúdo do fence (sem os ``` delimitadores).
+        raw_lines = raw.splitlines()
+        if not raw_lines:
+            continue
+        first = raw_lines[0]
+        # Acha onde esse bloco começa no corpo, a partir da última posição vista.
+        for idx in range(search_from, len(lines)):
+            if lines[idx].strip() == first.strip():
+                start = idx
+                end = min(idx + len(raw_lines), len(lines))
+                ranges.append((start, end))
+                search_from = end
+                break
+    return ranges
+
+
+def _in_fence(line_idx: int, fences: list[tuple[int, int]]) -> bool:
+    return any(start <= line_idx < end for start, end in fences)
 
 
 def split_sections(body: str) -> dict[str, str]:
-    """Fatia o corpo em {faceta: texto}, casando os headings de topo reais.
+    """Fatia o corpo em {faceta: texto}.
 
-    Percorre o texto linha a linha, mas só considera heading uma linha que o AST
-    do mistune confirmou como heading de topo (evita code fences). O conteúdo de
-    uma seção vai do heading até o próximo heading de topo — subseções (###)
-    ficam incluídas.
+    Percorre o texto linha a linha; uma linha é heading de topo se casa
+    '^#{1,2}\\s+' E não está dentro de um code fence (o mistune fornece os
+    intervalos de fence). Casa-se o NOME normalizado do heading contra o mapa de
+    facetas — sem depender do texto renderizado do AST, que descarta markdown
+    inline (código/negrito) do título e desalinhava o casamento.
+
+    Conteúdo de uma seção vai do heading até o próximo heading de topo;
+    subseções (###) ficam incluídas (não são fronteira). Headings que não casam
+    faceta (título '# Triagem', '## Confiança') abrem uma seção que é descartada.
     """
-    real = _real_headings(body)
-    if not real:
-        return {}
-    # Fila dos textos de heading de topo reais, na ordem — consumida ao casar.
-    pending = [txt for _lvl, txt in real]
-
+    fences = _fenced_line_ranges(body)
     lines = body.splitlines()
     sections: dict[str, str] = {}
     cur_facet: str | None = None
@@ -103,18 +121,14 @@ def split_sections(body: str) -> dict[str, str]:
             sections[facet] = text
 
     for i, line in enumerate(lines):
-        m = re.match(r"^\s{0,3}(#{1,2})\s+(.+?)\s*$", line)
+        if _in_fence(i, fences):
+            continue
+        m = re.match(r"^\s{0,3}#{1,2}\s+(.+?)\s*$", line)
         if not m:
             continue
-        text = m.group(2).strip()
-        # Só é fronteira se corresponde ao próximo heading real esperado (na
-        # ordem) — assim um '## x' dentro de code fence, que o AST não listou,
-        # não vira fronteira.
-        if pending and text == pending[0]:
-            pending.pop(0)
-            flush(cur_facet, cur_start, i)
-            cur_facet = _FACET_BY_SECTION.get(_normalize(text))
-            cur_start = i + 1
+        flush(cur_facet, cur_start, i)
+        cur_facet = _FACET_BY_SECTION.get(_normalize(m.group(1)))
+        cur_start = i + 1
     flush(cur_facet, cur_start, len(lines))
     return sections
 

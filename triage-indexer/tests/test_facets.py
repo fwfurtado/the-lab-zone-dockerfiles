@@ -93,3 +93,47 @@ def test_sem_secoes_conhecidas_vazio():
     # Corpo sem nenhuma das 4 seções -> nenhum ponto (não força faceta).
     secs = facets.split_sections("## Outra coisa\ntexto\n\n## Mais uma\nmais")
     assert secs == {}
+
+
+def test_titulo_nivel_1_com_codigo_inline():
+    # Regressão (TargetDown real): título '# Triagem: X — `code`' (nível 1, com
+    # código inline) não deve impedir o reconhecimento das seções nível 2.
+    # O mistune renderiza o heading sem o código inline; o parser não deve
+    # depender de casar esse texto renderizado contra a linha crua.
+    body = """# Triagem: TargetDown — `victoria-metrics-operator`
+
+## Sintoma
+Scrape down.
+
+## Evidência
+up=0.
+
+## Causa provável
+Saturação do operator.
+
+## Próximo passo
+Restart do pod.
+
+## Confiança
+Média."""
+    secs = facets.split_sections(body)
+    assert set(secs) == {"symptom", "evidence", "cause", "next_step"}
+    assert "Saturação" in secs["cause"]
+
+
+def test_code_fence_com_multiplas_linhas_hash():
+    # Fence com várias linhas iniciadas por # não deve gerar facetas fantasma.
+    body = """## Sintoma
+Erro no log:
+
+```
+# comentário 1
+## comentário 2
+### comentário 3
+```
+
+## Causa provável
+A causa real."""
+    secs = facets.split_sections(body)
+    assert set(secs) == {"symptom", "cause"}
+    assert "comentário" in secs["symptom"]
