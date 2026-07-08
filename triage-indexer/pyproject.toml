@@ -7,13 +7,24 @@ dependencies = [
     "qdrant-client>=1.12",
     "mcp-server-qdrant>=0.2",  # reusa o FastEmbedProvider/e5-large da imagem base
     "mistune>=3.0",            # parser de markdown, só o facets usa
+    # Só o classificador usa. `-slim[openai]` em vez do pacote cheio: o LiteLLM é
+    # OpenAI-compatible, então esse é o único provider necessário. O que se compra
+    # aqui é o `output_type` com union discriminado + retry quando o modelo viola
+    # o schema (ADR-0013) — não uma camada de orquestração de agentes.
+    "pydantic-ai-slim[openai]>=2.5",
+    # Observabilidade do classificador: mesmas versões que o núcleo dos agentes
+    # pina. A instrumentação vive na APLICAÇÃO, não no gateway LiteLLM.
+    "opentelemetry-sdk>=1.42.1",
+    "opentelemetry-exporter-otlp-proto-http>=1.42.1",
+    "opentelemetry-processor-baggage>=0.63b1",
 ]
 
 [project.scripts]
-# Dois entrypoints: cada step do Argo chama o comando do seu modo. O comando no
+# Três entrypoints: cada step do Argo chama o comando do seu modo. O comando no
 # manifesto já diz qual modo é — observabilidade sem ler env/log.
 triage-index-gestalt = "triage_indexer.gestalt:main"
 triage-index-facets = "triage_indexer.facets:main"
+triage-classify = "triage_indexer.classifier:main"
 
 [build-system]
 requires = ["setuptools>=68"]
