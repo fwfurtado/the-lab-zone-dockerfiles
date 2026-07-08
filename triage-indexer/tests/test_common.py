@@ -71,3 +71,19 @@ def test_base_payload_campos_comuns():
     assert md["namespace"] == "data"
     assert md["confirmation"] == "unverified"
     assert md["run_id"] == cfg.run_id
+
+
+def test_unquote_nao_corrompe_barra_invertida():
+    """Regressão: substituições em cadeia trocavam `\\t` (barra escapada + 't')
+    por TAB antes de resolver a barra. Alcançável agora que o `verdict` do
+    classificador é texto livre gerado por LLM (regex, paths)."""
+    b = chr(92)
+    original = f"C:{b}tmp"                       # C:\tmp
+    emitido = original.replace(b, b * 2)         # C:\\tmp (escapado)
+    assert _common._unquote(f'"{emitido}"') == original
+
+
+def test_unquote_preserva_escapes_normais():
+    assert _common._unquote(r'"linha\nquebra"') == "linha\nquebra"
+    assert _common._unquote(r'"aspa\"dupla"') == 'aspa"dupla'
+    assert _common._unquote(r'"tab\there"') == "tab\there"

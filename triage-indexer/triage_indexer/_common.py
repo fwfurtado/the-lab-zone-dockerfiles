@@ -73,11 +73,16 @@ class Config:
 
 @dataclass(frozen=True)
 class Report:
-    """Um relatório parseado: front-matter + corpo limpo (sem preâmbulo)."""
+    """Um relatório parseado: front-matter + corpo limpo (sem preâmbulo).
+
+    `path` é o caminho de onde foi lido. O classificador o usa para espelhar
+    `triage/…` -> `conclusions/…` sem reconstruir a chave (ADR-0013).
+    """
 
     dedup_key: str
     front_matter: dict
     body: str
+    path: str = ""
 
 
 @dataclass(frozen=True)
@@ -90,13 +95,35 @@ class Point:
     extra_payload: dict  # campos além dos comuns (ex.: {"section": "evidence"})
 
 
+_ESCAPES = {'"': '"', "\\": "\\", "n": "\n", "t": "\t", "r": "\r"}
+
+
+def _unescape(s: str) -> str:
+    """Desfaz o escape em UMA passada, da esquerda para a direita.
+
+    Substituições em cadeia (`s.replace(r'\\t', '\t').replace(r'\\\\', '\\')`)
+    corrompem a barra invertida: em `C:\\\\tmp` (barra escapada + 't'), o
+    `\\t` casa antes de a barra ser resolvida e vira TAB. Uma passada só,
+    consumindo o par, não tem esse acoplamento entre regras.
+    """
+    out: list[str] = []
+    i, n = 0, len(s)
+    while i < n:
+        c = s[i]
+        if c == "\\" and i + 1 < n and s[i + 1] in _ESCAPES:
+            out.append(_ESCAPES[s[i + 1]])
+            i += 2
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
 def _unquote(s: str) -> str:
     """Remove aspas duplas externas e desfaz o escape mínimo do yamlString Go."""
     s = s.strip()
     if len(s) >= 2 and s[0] == '"' and s[-1] == '"':
-        s = s[1:-1]
-        s = s.replace('\\"', '"').replace("\\n", "\n").replace("\\t", "\t")
-        s = s.replace("\\r", "\r").replace("\\\\", "\\")
+        return _unescape(s[1:-1])
     return s
 
 
@@ -143,12 +170,17 @@ def parse_document(text: str) -> tuple[dict, str]:
     return fm, body.strip()
 
 
-def collect_reports(cfg: Config) -> list[Report]:
+def collect_reports_from(repo_dir: str, globs: list[str], tag: str = "indexer") -> list[Report]:
     """Lê e parseia cada .md sob repo_dir. Pula relatórios sem dedup_key (não
-    indexáveis de forma idempotente) ou sem corpo, com aviso."""
+    indexáveis de forma idempotente) ou sem corpo, com aviso.
+
+    Separado de `collect_reports(cfg)` para que o classificador — que não tem
+    Config de Qdrant — reuse o MESMO parser (ADR-0010: o parser vive num lugar
+    só, e já teve bugs; não deve divergir entre consumidores).
+    """
     reports: list[Report] = []
-    for g in cfg.globs:
-        for path in glob.glob(os.path.join(cfg.repo_dir, g.strip()), recursive=True):
+    for g in globs:
+        for path in glob.glob(os.path.join(repo_dir, g.strip()), recursive=True):
             if not os.path.isfile(path):
                 continue
             try:
@@ -158,13 +190,18 @@ def collect_reports(cfg: Config) -> list[Report]:
             fm, body = parse_document(txt)
             dedup = fm.get("dedup_key") or fm.get("incident_key")
             if not dedup:
-                print(f"[indexer] AVISO: sem dedup_key, pulando {path}", flush=True)
+                print(f"[{tag}] AVISO: sem dedup_key, pulando {path}", flush=True)
                 continue
             if not body:
-                print(f"[indexer] AVISO: corpo vazio, pulando {path}", flush=True)
+                print(f"[{tag}] AVISO: corpo vazio, pulando {path}", flush=True)
                 continue
-            reports.append(Report(dedup_key=dedup, front_matter=fm, body=body))
+            reports.append(Report(dedup_key=dedup, front_matter=fm, body=body, path=path))
     return reports
+
+
+def collect_reports(cfg: Config) -> list[Report]:
+    """Coleta os relatórios da Config do indexer."""
+    return collect_reports_from(cfg.repo_dir, cfg.globs)
 
 
 def base_payload(cfg: Config, r: Report) -> dict:
