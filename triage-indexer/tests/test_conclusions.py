@@ -13,6 +13,7 @@ from pydantic import ValidationError
 
 from triage_indexer import _common
 from triage_indexer.conclusions import (
+    VERDICT_MAX_CHARS,
     Diagnosed,
     Inconclusive,
     conclusion_path_for,
@@ -82,9 +83,30 @@ def test_roundtrip_verdict_com_dois_pontos():
     assert back.verdict == "Causa: saturação de IO"
 
 
-def test_verdict_limitado_a_200_chars():
+def test_verdict_limitado_pelo_teto_de_seguranca():
+    Diagnosed(verdict="x" * VERDICT_MAX_CHARS, confidence="high", rationale="r")  # no limite: ok
     with pytest.raises(ValidationError):
-        Diagnosed(verdict="x" * 201, confidence="high", rationale="r")
+        Diagnosed(verdict="x" * (VERDICT_MAX_CHARS + 1), confidence="high", rationale="r")
+
+
+def test_reason_tem_o_mesmo_teto():
+    with pytest.raises(ValidationError):
+        Inconclusive(reason="x" * (VERDICT_MAX_CHARS + 1), rationale="r")
+
+
+def test_regressao_verdict_real_de_producao_cabe():
+    """Este verdict (220 chars) estourou o teto antigo de 200 em produção e custou
+    DOIS retries do LLM (string_too_long). Causa legítima; nomes de recurso entre
+    crases comem 78 caracteres. O teto é rede de segurança, não régua de estilo."""
+    v = (
+        "Pod de teste `drop-test` em `ai` é negado corretamente pela CNP "
+        "`postgresql-default-deny-ingress` em `data` por não possuir o label "
+        "`app.kubernetes.io/name` exigido na allowlist; a policy está funcionando "
+        "como projetado."
+    )
+    assert len(v) > 200, "o caso perdeu a graça se encolheu"
+    c = Diagnosed(verdict=v, confidence="high", rationale="r")
+    assert c.verdict == v
 
 
 def test_confidence_so_aceita_o_enum():

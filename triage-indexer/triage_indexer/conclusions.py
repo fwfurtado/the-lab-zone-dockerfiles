@@ -29,6 +29,22 @@ from pydantic import BaseModel, Field
 
 SCHEMA_VERSION = 1
 
+# Rede de segurança contra patologia (um "verdict" de dois parágrafos), NÃO
+# policiamento de estilo. A concisão é pedida no prompt; o limite só existe para
+# o payload do Qdrant não degenerar.
+#
+# Por que folgado (300 e não 200): o modelo NÃO sabe contar caracteres. Com o
+# limite colado no comprimento típico, toda causa um pouco mais longa vira
+# `string_too_long` -> retry -> outra chamada ao LLM. Observado em produção: uma
+# causa legítima de 220 chars (177 só de causa, 78 gastos em nomes de recurso
+# entre crases, como `postgresql-default-deny-ingress`) custou DOIS retries;
+# com `retries=2` a classificação ficou a uma tentativa de falhar de vez. E cada
+# retry reenvia o histórico e repaga os reasoning_tokens.
+#
+# O verdict vai ao PAYLOAD do Qdrant, não ao embedding: 300 chars não custam
+# recuperação. Um retry custa ~6s e ~$0.003.
+VERDICT_MAX_CHARS = 300
+
 # Prefixos irmãos no bucket. O relatório é imutável; a conclusão é regenerável.
 TRIAGE_PREFIX = "triage"
 CONCLUSIONS_PREFIX = "conclusions"
@@ -41,8 +57,8 @@ class Diagnosed(BaseModel):
 
     outcome: Literal["diagnosed"] = "diagnosed"
     verdict: str = Field(
-        max_length=200,
-        description="A causa primária apontada pelo relatório, em uma frase (máx. 200 chars).",
+        max_length=VERDICT_MAX_CHARS,
+        description="A causa primária apontada pelo relatório, em uma frase curta.",
     )
     confidence: Literal["high", "medium", "low"] = Field(
         description="Confiança do DIAGNÓSTICO PRIMÁRIO (não o mínimo entre afirmações auxiliares).",
@@ -57,8 +73,8 @@ class Inconclusive(BaseModel):
 
     outcome: Literal["inconclusive"] = "inconclusive"
     reason: str = Field(
-        max_length=200,
-        description="Por que não houve diagnóstico, em uma frase (máx. 200 chars).",
+        max_length=VERDICT_MAX_CHARS,
+        description="Por que não houve diagnóstico, em uma frase curta.",
     )
     rationale: str = Field(
         description="Por que esta leitura: o que no relatório indica a ausência de conclusão.",

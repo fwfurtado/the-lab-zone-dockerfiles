@@ -261,3 +261,16 @@ def test_write_conclusion_sobrescreve(tmp_path):
 
     txt = open(p, encoding="utf-8").read()
     assert "v2" in txt and "v1" not in txt
+
+
+def test_prompt_proibe_cauda_de_juizo_no_verdict():
+    """O modelo acrescentava 'a policy está funcionando como projetado' ao verdict:
+    juízo sobre a triagem, não causa — e 41 chars a menos para a causa."""
+    assert "SOMENTE a causa" in INSTRUCTIONS
+    assert "funcionando como projetado" in INSTRUCTIONS  # o exemplo negativo
+
+
+def test_prompt_pede_concisao_sem_delegar_contagem_ao_modelo():
+    # Estilo no prompt (alvo ~150), teto duro no schema. O modelo não conta chars.
+    assert "~150" in INSTRUCTIONS
+    assert "200 caracteres" not in INSTRUCTIONS

@@ -72,13 +72,15 @@ passo, Confiança.
 Decida entre DOIS resultados possíveis:
 
 1. DIAGNOSED — o relatório apontou uma causa provável.
-   - `verdict`: a causa primária, em UMA frase de no máximo 200 caracteres.
-     Descreva a causa, não o sintoma.
+   - `verdict`: a causa primária, em UMA frase curta (mire ~150 caracteres).
+     Descreva a causa, não o sintoma. Escreva SOMENTE a causa: não acrescente
+     juízo sobre a triagem ("a policy está funcionando como projetado", "nada a
+     fazer", "comportamento esperado") — isso não é causa e consome a frase.
    - `confidence`: a confiança do DIAGNÓSTICO PRIMÁRIO.
 
 2. INCONCLUSIVE — o relatório NÃO chegou a uma causa (ex.: afirma "não há dado
    suficiente", ou lista apenas hipóteses descartadas sem eleger uma causa).
-   - `reason`: por que não houve diagnóstico, em UMA frase de até 200 caracteres.
+   - `reason`: por que não houve diagnóstico, em UMA frase curta (~150 chars).
 
 REGRA CRÍTICA SOBRE A CONFIANÇA: extraia a confiança do diagnóstico PRIMÁRIO — a
 causa que o relatório elegeu. NÃO use o mínimo global entre as afirmações do
