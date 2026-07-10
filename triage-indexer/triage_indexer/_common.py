@@ -25,9 +25,15 @@ import uuid
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 
-from mcp_server_qdrant.embeddings.fastembed import FastEmbedProvider
-from qdrant_client import AsyncQdrantClient, models
+# Imports PESADOS adiados. O `classifier` importa este módulo só pelo parser e
+# pelo Report — não fala com o Qdrant nem embeda nada. Mantê-los no topo faria o
+# pod do classificador carregar o fastembed (e o onnxruntime junto), centenas de
+# MB de RAM e segundos de start, para nada. `from __future__ import annotations`
+# torna as anotações strings, então o TYPE_CHECKING basta para os tipos.
+if TYPE_CHECKING:
+    from qdrant_client import AsyncQdrantClient, models
 
 # Namespace uuid5 (URL) — ids de ponto determinísticos e estáveis entre runs.
 NS = uuid.UUID("6ba7b811-9dad-11d1-80b4-00c04fd430c8")
@@ -44,6 +50,9 @@ class Config:
     model: str
     repo_dir: str
     globs: list[str]
+    # Onde estão as conclusões (artefato irmão, ADR-0013). Prefixo separado do
+    # dos relatórios: o glob dos relatórios NÃO pode varrê-las.
+    conclusion_globs: list[str]
     batch: int
     run_id: str
     # Caminho do arquivo de contagem (output do step Argo). Configurável para
@@ -63,7 +72,10 @@ class Config:
             collection=os.environ.get("COLLECTION_NAME", collection_default),
             model=os.environ.get("EMBEDDING_MODEL", "intfloat/multilingual-e5-large"),
             repo_dir=os.environ.get("REPO_DIR", "/workspace/repo"),
-            globs=os.environ.get("DOC_GLOBS", "**/*.md").split(","),
+            globs=os.environ.get("DOC_GLOBS", "triage/**/*.md").split(","),
+            conclusion_globs=os.environ.get(
+                "CONCLUSION_GLOBS", "conclusions/**/*.md"
+            ).split(","),
             batch=int(os.environ.get("EMBED_BATCH", "8")),
             run_id=datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"),
             count_path=os.environ.get("INDEXED_COUNT_PATH", "/workspace/indexed_count"),
@@ -204,11 +216,48 @@ def collect_reports(cfg: Config) -> list[Report]:
     return collect_reports_from(cfg.repo_dir, cfg.globs)
 
 
-def base_payload(cfg: Config, r: Report) -> dict:
+def load_conclusions(repo_dir: str, globs: list[str], tag: str = "indexer") -> dict[str, dict]:
+    """Lê os `.md` de conclusão e devolve {dedup_key: campos_de_payload}.
+
+    O artefato de conclusão é irmão do relatório no Garage (ADR-0013), colado
+    pela `dedup_key`. Reusa o MESMO parser de front-matter do relatório — os dois
+    têm a mesma anatomia, e o parser vive num lugar só (ADR-0010).
+
+    Conclusão malformada é PULADA COM AVISO, não derruba a indexação: o relatório
+    ainda entra, só sem verdict/confidence. E `from_front_matter` valida a união
+    discriminada, então um artefato incoerente (diagnosed sem verdict) é barulho,
+    não payload torto no Qdrant.
+    """
+    from triage_indexer.conclusions import from_front_matter, payload_fields
+
+    out: dict[str, dict] = {}
+    for g in globs:
+        for path in glob.glob(os.path.join(repo_dir, g.strip()), recursive=True):
+            if not os.path.isfile(path):
+                continue
+            try:
+                fm, _ = parse_document(open(path, encoding="utf-8").read())
+                dedup = fm.get("dedup_key")
+                if not dedup:
+                    print(f"[{tag}] AVISO: conclusão sem dedup_key, pulando {path}", flush=True)
+                    continue
+                out[dedup] = payload_fields(from_front_matter(fm))
+            except Exception as e:  # noqa: BLE001 — uma conclusão ruim não derruba o corpus
+                print(f"[{tag}] AVISO: conclusão inválida em {path}: {e}", flush=True)
+    return out
+
+
+def base_payload(cfg: Config, r: Report, conclusion: dict | None = None) -> dict:
     """Payload comum a todo ponto: os fatos do front-matter + run_id. Os modos
-    acrescentam o que é seu (ex.: facets adiciona 'section')."""
+    acrescentam o que é seu (ex.: facets adiciona 'section').
+
+    `conclusion` são os campos derivados do artefato irmão (outcome/verdict/
+    confidence). Quando ausente — relatório recém-triado, ainda não classificado —
+    os campos simplesmente NÃO entram no payload. O filtro por confiança não o
+    alcança até a conclusão existir; nada bloqueia, nada falha.
+    """
     fm = r.front_matter
-    return {
+    payload = {
         "document": None,  # preenchido por ponto (o texto embedado)
         "metadata": {
             "dedup_key": r.dedup_key,
@@ -222,6 +271,9 @@ def base_payload(cfg: Config, r: Report) -> dict:
             "run_id": cfg.run_id,
         },
     }
+    if conclusion:
+        payload["metadata"].update(conclusion)
+    return payload
 
 
 # build_points: dado um Report, produz os pontos daquele relatório. É o ÚNICO
@@ -232,6 +284,8 @@ BuildPoints = Callable[[Report], Iterable[Point]]
 async def _ensure_collection(client: AsyncQdrantClient, cfg: Config, vname: str, vsize: int) -> bool:
     """Garante a collection com o vetor nomeado e os índices de payload. Recria
     se o schema do vetor for incompatível. Retorna True se (re)criou."""
+    from qdrant_client import models
+
     recreate = True
     if await client.collection_exists(cfg.collection):
         vectors = (await client.get_collection(cfg.collection)).config.params.vectors
@@ -259,9 +313,42 @@ async def _ensure_collection(client: AsyncQdrantClient, cfg: Config, vname: str,
     return recreate
 
 
+def _report_enrichment(reports: list[Report], conclusions: dict[str, dict], tag: str = "indexer") -> None:
+    """Diz em voz alta quantos relatórios ganharam conclusão.
+
+    Sem isto, um enriquecimento que não aconteceu (prefixo `conclusions/` não
+    baixado, glob errado, classificador não rodou) é INDISTINGUÍVEL, no Qdrant, de
+    um corpus legitimamente não classificado: em ambos os casos o payload só não
+    tem `outcome`. O sintoma aparece dias depois, num filtro que não casa nada.
+    """
+    if not reports:
+        return
+    enriched = sum(1 for r in reports if r.dedup_key in conclusions)
+    print(
+        f"[{tag}] conclusões: {len(conclusions)} carregadas; "
+        f"{enriched}/{len(reports)} relatórios enriquecidos",
+        flush=True,
+    )
+    if not conclusions:
+        print(
+            f"[{tag}] AVISO: 0 conclusões para {len(reports)} relatórios. "
+            "O classificador rodou? O prefixo conclusions/ foi baixado? "
+            "Os pontos serão indexados SEM outcome/verdict/confidence.",
+            flush=True,
+        )
+    # Órfãs: conclusão sem relatório correspondente. Sinaliza corpus dessincronizado
+    # (relatório deletado do bucket, ou dedup_key divergente entre os artefatos).
+    orphans = set(conclusions) - {r.dedup_key for r in reports}
+    if orphans:
+        print(f"[{tag}] AVISO: {len(orphans)} conclusões sem relatório irmão", flush=True)
+
+
 async def reconcile(cfg: Config, build_points: BuildPoints) -> int:
     """Reconcilia repo_dir -> collection. Comum aos dois modos; o que muda é
     build_points. Retorna o número de pontos upsertados."""
+    from mcp_server_qdrant.embeddings.fastembed import FastEmbedProvider
+    from qdrant_client import AsyncQdrantClient, models
+
     provider = FastEmbedProvider(cfg.model)
     vname, vsize = provider.get_vector_name(), provider.get_vector_size()
     client = AsyncQdrantClient(url=cfg.qdrant_url, api_key=cfg.api_key)
@@ -269,6 +356,11 @@ async def reconcile(cfg: Config, build_points: BuildPoints) -> int:
     recreate = await _ensure_collection(client, cfg, vname, vsize)
 
     reports = collect_reports(cfg)
+    # As conclusões são artefato irmão no Garage (ADR-0013), coladas pela
+    # dedup_key. Relatório sem conclusão é indexado sem verdict/confidence —
+    # degradação suave, o filtro por confiança simplesmente não o alcança.
+    conclusions = load_conclusions(cfg.repo_dir, cfg.conclusion_globs)
+    _report_enrichment(reports, conclusions)
 
     # Materializa (report, point) para todos os pontos de todos os relatórios.
     pending: list[tuple[Report, Point]] = [
@@ -292,7 +384,7 @@ async def reconcile(cfg: Config, build_points: BuildPoints) -> int:
         vecs = await provider.embed_documents([p.text for _, p in batch])
         points = []
         for (r, p), v in zip(batch, vecs):
-            payload = base_payload(cfg, r)
+            payload = base_payload(cfg, r, conclusions.get(r.dedup_key))
             payload["document"] = p.text
             payload["metadata"].update(p.extra_payload)
             pid = uuid.uuid5(NS, r.dedup_key if not p.suffix else f"{r.dedup_key}#{p.suffix}")

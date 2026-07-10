@@ -23,6 +23,12 @@ PAYLOAD_INDEXES = {
     "metadata.namespace": models.PayloadSchemaType.KEYWORD,
     "metadata.alertnames": models.PayloadSchemaType.KEYWORD,
     "metadata.confirmation": models.PayloadSchemaType.KEYWORD,
+    # Campos da CONCLUSÃO (artefato irmão, ADR-0013). Ausentes num relatório ainda
+    # não classificado — o Qdrant indexa o que existe; o filtro só não o alcança.
+    # Quando virarem FilterableField no MCP, usar condition POSITIVA (== high,
+    # == diagnosed), NUNCA `!=`: a inversão derrotou o agente em produção (ADR-0012).
+    "metadata.outcome": models.PayloadSchemaType.KEYWORD,
+    "metadata.confidence": models.PayloadSchemaType.KEYWORD,
 }
 
 
