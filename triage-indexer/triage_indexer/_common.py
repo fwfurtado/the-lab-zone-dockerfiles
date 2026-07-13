@@ -53,6 +53,10 @@ class Config:
     # Onde estão as conclusões (artefato irmão, ADR-0013). Prefixo separado do
     # dos relatórios: o glob dos relatórios NÃO pode varrê-las.
     conclusion_globs: list[str]
+    # Onde está o feedback humano (terceiro artefato irmão, ADR-0014). Prefixo
+    # PRÓPRIO, disjunto de conclusion_globs — é o que torna o isolamento do
+    # --reclassify uma CONSEQUÊNCIA do glob, não uma promessa de convenção.
+    confirmation_globs: list[str]
     batch: int
     run_id: str
     # Caminho do arquivo de contagem (output do step Argo). Configurável para
@@ -75,6 +79,9 @@ class Config:
             globs=os.environ.get("DOC_GLOBS", "triage/**/*.md").split(","),
             conclusion_globs=os.environ.get(
                 "CONCLUSION_GLOBS", "conclusions/**/*.md"
+            ).split(","),
+            confirmation_globs=os.environ.get(
+                "CONFIRMATION_GLOBS", "confirmations/**/*.md"
             ).split(","),
             batch=int(os.environ.get("EMBED_BATCH", "8")),
             run_id=datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"),
@@ -247,14 +254,55 @@ def load_conclusions(repo_dir: str, globs: list[str], tag: str = "indexer") -> d
     return out
 
 
-def base_payload(cfg: Config, r: Report, conclusion: dict | None = None) -> dict:
+def load_confirmations(repo_dir: str, globs: list[str], tag: str = "indexer") -> dict[str, dict]:
+    """Lê os `.md` de confirmações e devolve {dedup_key: {"confirmation": ...}}.
+
+    Terceiro artefato irmão no Garage (ADR-0014), feedback HUMANO — reusa o
+    MESMO parser de front-matter (ADR-0010). Só `confirmation` sobe ao payload;
+    `confirmed_by`/`confirmed_at`/`note`/`via` ficam SÓ no artefato (auditoria,
+    igual ao `rationale` das conclusões — dado sem leitor não sobe, ADR-0008).
+
+    Valor fora de confirmed/refuted é pulado com aviso, nunca propagado — o
+    Qdrant nunca recebe um `confirmation` que não seja um destes dois ou a
+    ausência (que `base_payload` traduz para "unverified").
+    """
+    out: dict[str, dict] = {}
+    for g in globs:
+        for path in glob.glob(os.path.join(repo_dir, g.strip()), recursive=True):
+            if not os.path.isfile(path):
+                continue
+            try:
+                fm, _ = parse_document(open(path, encoding="utf-8").read())
+                dedup = fm.get("dedup_key")
+                if not dedup:
+                    print(f"[{tag}] AVISO: confirmação sem dedup_key, pulando {path}", flush=True)
+                    continue
+                value = fm.get("confirmation")
+                if value not in ("confirmed", "refuted"):
+                    print(f"[{tag}] AVISO: confirmation inválida ({value!r}) em {path}", flush=True)
+                    continue
+                out[dedup] = {"confirmation": value}
+            except Exception as e:  # noqa: BLE001 — uma confirmação ruim não derruba o corpus
+                print(f"[{tag}] AVISO: confirmação inválida em {path}: {e}", flush=True)
+    return out
+
+
+def base_payload(
+    cfg: Config, r: Report, conclusion: dict | None = None, confirmation: dict | None = None
+) -> dict:
     """Payload comum a todo ponto: os fatos do front-matter + run_id. Os modos
     acrescentam o que é seu (ex.: facets adiciona 'section').
 
     `conclusion` são os campos derivados do artefato irmão (outcome/verdict/
-    confidence). Quando ausente — relatório recém-triado, ainda não classificado —
-    os campos simplesmente NÃO entram no payload. O filtro por confiança não o
+    confidence). Quando ausente — relatório recém-triado, ainda não classificado
+    — os campos simplesmente NÃO entram no payload: o filtro por confiança não o
     alcança até a conclusão existir; nada bloqueia, nada falha.
+
+    `confirmation` é DIFERENTE: sempre entra, com "unverified" como piso. Não é
+    um estado transitório tipo "ainda não classificado" — é um estado de
+    repouso legítimo que pode durar para sempre (a maioria dos incidentes nunca
+    recebe feedback humano, e está tudo bem). Por isso tem default, ao
+    contrário de outcome/verdict/confidence (ADR-0014).
     """
     fm = r.front_matter
     payload = {
@@ -266,13 +314,18 @@ def base_payload(cfg: Config, r: Report, conclusion: dict | None = None) -> dict
             "alertnames": fm.get("alertnames", []),
             "fired_at": fm.get("fired_at", ""),
             "triaged_at": fm.get("triaged_at", ""),
-            # Gancho da decisão 4: permite ao Tier 1 despriorizar refutados.
-            "confirmation": fm.get("confirmation", "unverified"),
+            # Piso, não leitura do relatório: desde o ADR-0014 o relatório
+            # IMUTÁVEL não carrega mais este campo (nunca teve como escrevê-lo
+            # ali sem violar a própria imutabilidade). A fonte de verdade é o
+            # artefato confirmations/, mesclado abaixo quando existir.
+            "confirmation": "unverified",
             "run_id": cfg.run_id,
         },
     }
     if conclusion:
         payload["metadata"].update(conclusion)
+    if confirmation:
+        payload["metadata"].update(confirmation)
     return payload
 
 
@@ -343,6 +396,30 @@ def _report_enrichment(reports: list[Report], conclusions: dict[str, dict], tag:
         print(f"[{tag}] AVISO: {len(orphans)} conclusões sem relatório irmão", flush=True)
 
 
+def _confirmation_enrichment(reports: list[Report], confirmations: dict[str, dict], tag: str = "indexer") -> None:
+    """Diz em voz alta quantos relatórios têm feedback humano.
+
+    DIFERENTE de `_report_enrichment` (conclusões) no limiar de alarme: 0
+    confirmações para N relatórios NÃO é sintoma de pipeline quebrado — é o
+    estado normal na maioria do tempo (a maioria dos incidentes nunca recebe
+    feedback humano, e "unverified" é um repouso válido, não um erro
+    transitório como "ainda não classificado"). Por isso, ao contrário de
+    `_report_enrichment`, não há aviso barulhento para zero confirmações — só
+    para órfãs, que continuam sinalizando corpus dessincronizado de verdade.
+    """
+    if not reports:
+        return
+    confirmed_count = sum(1 for r in reports if r.dedup_key in confirmations)
+    print(
+        f"[{tag}] confirmações: {len(confirmations)} carregadas; "
+        f"{confirmed_count}/{len(reports)} relatórios com feedback humano",
+        flush=True,
+    )
+    orphans = set(confirmations) - {r.dedup_key for r in reports}
+    if orphans:
+        print(f"[{tag}] AVISO: {len(orphans)} confirmações sem relatório irmão", flush=True)
+
+
 async def reconcile(cfg: Config, build_points: BuildPoints) -> int:
     """Reconcilia repo_dir -> collection. Comum aos dois modos; o que muda é
     build_points. Retorna o número de pontos upsertados."""
@@ -361,6 +438,11 @@ async def reconcile(cfg: Config, build_points: BuildPoints) -> int:
     # degradação suave, o filtro por confiança simplesmente não o alcança.
     conclusions = load_conclusions(cfg.repo_dir, cfg.conclusion_globs)
     _report_enrichment(reports, conclusions)
+
+    # Terceiro artefato irmão: feedback humano (ADR-0014). Ausência é
+    # "unverified" por default no base_payload — não degradação, repouso.
+    confirmations = load_confirmations(cfg.repo_dir, cfg.confirmation_globs)
+    _confirmation_enrichment(reports, confirmations)
 
     # Materializa (report, point) para todos os pontos de todos os relatórios.
     pending: list[tuple[Report, Point]] = [
@@ -384,7 +466,7 @@ async def reconcile(cfg: Config, build_points: BuildPoints) -> int:
         vecs = await provider.embed_documents([p.text for _, p in batch])
         points = []
         for (r, p), v in zip(batch, vecs):
-            payload = base_payload(cfg, r, conclusions.get(r.dedup_key))
+            payload = base_payload(cfg, r, conclusions.get(r.dedup_key), confirmations.get(r.dedup_key))
             payload["document"] = p.text
             payload["metadata"].update(p.extra_payload)
             pid = uuid.uuid5(NS, r.dedup_key if not p.suffix else f"{r.dedup_key}#{p.suffix}")

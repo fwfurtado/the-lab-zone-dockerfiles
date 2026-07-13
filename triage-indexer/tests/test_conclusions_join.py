@@ -25,6 +25,7 @@ def _cfg(tmp_path):
         repo_dir=str(tmp_path),
         globs=["triage/**/*.md"],
         conclusion_globs=["conclusions/**/*.md"],
+        confirmation_globs=["confirmations/**/*.md"],
         batch=8,
         run_id="run1",
         count_path="/tmp/x",
@@ -213,3 +214,117 @@ def test_conclusao_orfa_avisa(capsys):
 def test_corpus_vazio_nao_polui_o_log(capsys):
     _common._report_enrichment([], {})
     assert capsys.readouterr().out == ""
+
+
+# --------------------------------------------------------------------------
+# Peça 2 da B.2: o indexer lê confirmations/ (ADR-0014)
+# --------------------------------------------------------------------------
+
+from triage_indexer._common import load_confirmations
+
+
+def _write_confirmation(tmp_path, dedup, value, note=""):
+    p = tmp_path / "confirmations" / "data" / "Alert" / f"2026__{dedup}.md"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(
+        f'---\nschema: 1\ndedup_key: {dedup}\nconfirmation: {value}\n'
+        f'confirmed_by: U0123ABC\nconfirmed_at: 2026-07-13T18:18:09Z\nvia: slack_modal\n---\n\n## Motivo\n\n{note}\n',
+        encoding="utf-8",
+    )
+    return p
+
+
+def test_carrega_confirmacao_confirmed(tmp_path):
+    _write_confirmation(tmp_path, "aaa", "confirmed")
+    got = load_confirmations(str(tmp_path), ["confirmations/**/*.md"])
+    assert got == {"aaa": {"confirmation": "confirmed"}}
+
+
+def test_carrega_confirmacao_refuted(tmp_path):
+    _write_confirmation(tmp_path, "bbb", "refuted", note="não foi isso")
+    got = load_confirmations(str(tmp_path), ["confirmations/**/*.md"])
+    assert got == {"bbb": {"confirmation": "refuted"}}
+
+
+def test_note_confirmed_by_via_nao_sobem_ao_payload(tmp_path):
+    """Só confirmation sobe — confirmed_by/confirmed_at/note/via ficam só no
+    artefato (auditoria), mesma disciplina do rationale das conclusões."""
+    _write_confirmation(tmp_path, "aaa", "confirmed", note="motivo qualquer")
+    got = load_confirmations(str(tmp_path), ["confirmations/**/*.md"])
+    assert set(got["aaa"].keys()) == {"confirmation"}
+
+
+def test_valor_invalido_e_pulado_com_aviso(tmp_path, capsys):
+    ok = _write_confirmation(tmp_path, "aaa", "confirmed")
+    ruim = ok.parent / "2026__zzz.md"
+    ruim.write_text('---\ndedup_key: zzz\nconfirmation: maybe\n---\n\n# x', encoding="utf-8")
+
+    got = load_confirmations(str(tmp_path), ["confirmations/**/*.md"])
+
+    assert "aaa" in got and "zzz" not in got
+    assert "confirmation inválida" in capsys.readouterr().out
+
+
+def test_sem_dedup_key_avisa(tmp_path, capsys):
+    p = tmp_path / "confirmations" / "x.md"
+    p.parent.mkdir(parents=True)
+    p.write_text('---\nconfirmation: confirmed\n---\n\n# x', encoding="utf-8")
+
+    assert load_confirmations(str(tmp_path), ["confirmations/**/*.md"]) == {}
+    assert "sem dedup_key" in capsys.readouterr().out
+
+
+def test_corpus_sem_confirmacoes_devolve_vazio(tmp_path):
+    assert load_confirmations(str(tmp_path), ["confirmations/**/*.md"]) == {}
+
+
+# --------------------------------------------------------------------------
+# base_payload: confirmation tem PISO "unverified", ao contrário de outcome
+# (que simplesmente não entra quando ausente) — a distinção é proposital
+# (ADR-0014: unverified é repouso válido, não estado transitório).
+# --------------------------------------------------------------------------
+
+
+def test_payload_default_e_unverified_sem_artefato(tmp_path):
+    md = base_payload(_cfg(tmp_path), _report("aaa"))["metadata"]
+    assert md["confirmation"] == "unverified"
+
+
+def test_payload_confirmation_confirmed(tmp_path):
+    md = base_payload(_cfg(tmp_path), _report("aaa"), None, {"confirmation": "confirmed"})["metadata"]
+    assert md["confirmation"] == "confirmed"
+
+
+def test_payload_confirmation_refuted(tmp_path):
+    md = base_payload(_cfg(tmp_path), _report("bbb"), None, {"confirmation": "refuted"})["metadata"]
+    assert md["confirmation"] == "refuted"
+
+
+def test_payload_confirmation_nao_le_mais_do_relatorio_imutavel(tmp_path):
+    """O relatório de triagem não escreve mais confirmation (ADR-0014 emenda o
+    ADR-0007) — mesmo que um front-matter ANTIGO ainda tenha o campo (corpus
+    pré-migração), o indexer não deve mais lê-lo de lá."""
+    r = _report("aaa", confirmation="confirmed")  # front-matter antigo, pré-B.2
+    md = base_payload(_cfg(tmp_path), r)["metadata"]
+    assert md["confirmation"] == "unverified"  # ignora o campo velho do relatório
+
+
+def test_confirmation_enrichment_zero_nao_e_alarmante(tmp_path, capsys):
+    """Ao contrário de _report_enrichment: zero confirmações é normal, não
+    dispara AVISO — a maioria dos incidentes nunca recebe feedback humano."""
+    _common._confirmation_enrichment([_report("aaa")], {})
+    out = capsys.readouterr().out
+    assert "1 carregadas" not in out  # sanity: não confundir contagens
+    assert "AVISO" not in out
+
+
+def test_confirmation_enrichment_orfa_avisa(tmp_path, capsys):
+    _common._confirmation_enrichment([_report("aaa")], {"aaa": {}, "zzz": {}})
+    assert "1 confirmações sem relatório irmão" in capsys.readouterr().out
+
+
+def test_default_dos_globs_de_confirmation(monkeypatch):
+    monkeypatch.setenv("QDRANT_URL", "http://stub")
+    monkeypatch.delenv("CONFIRMATION_GLOBS", raising=False)
+    cfg = _common.Config.from_env(collection_default="c", payload_indexes={})
+    assert cfg.confirmation_globs == ["confirmations/**/*.md"]
