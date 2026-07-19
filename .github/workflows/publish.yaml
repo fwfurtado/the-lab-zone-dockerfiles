@@ -11,6 +11,7 @@ on:
       - 'mcp-server-qdrant/**'
       - 'qa-indexer/**'
       - 'spark-delta/**'
+      - 'spark-jupyter/**'
       - 'triage-indexer/**'
 
   workflow_dispatch:
@@ -47,7 +48,7 @@ jobs:
               echo "matrix=[\"$INPUT_APP\"]" >> $GITHUB_OUTPUT
             else
               echo "Disparo manual para TODOS os apps"
-              echo "matrix=[\"dbt-runner\",\"goose-runner\",\"lightrag-langfuse\",\"mcp-server-qdrant\",\"qa-indexer\",\"spark-delta\",\"triage-indexer\"]" >> $GITHUB_OUTPUT
+              echo "matrix=[\"dbt-runner\",\"goose-runner\",\"lightrag-langfuse\",\"mcp-server-qdrant\",\"qa-indexer\",\"spark-delta\",\"spark-jupyter\",\"triage-indexer\"]" >> $GITHUB_OUTPUT
             fi
 
           # 2. SE FOI UM PUSH NORMAL NO GIT:
@@ -65,6 +66,7 @@ jobs:
             git diff --name-only $DIFF_REF | grep -q "^mcp-server-qdrant/" && APPS+=('"mcp-server-qdrant"')
             git diff --name-only $DIFF_REF | grep -q "^qa-indexer/" && APPS+=('"qa-indexer"')
             git diff --name-only $DIFF_REF | grep -q "^spark-delta/" && APPS+=('"spark-delta"')
+            git diff --name-only $DIFF_REF | grep -q "^spark-jupyter/" && APPS+=('"spark-jupyter"')
             git diff --name-only $DIFF_REF | grep -q "^triage-indexer/" && APPS+=('"triage-indexer"')
 
             echo "APPS detectados: ${APPS[@]}"
