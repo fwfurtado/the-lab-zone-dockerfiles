@@ -1,15 +1,20 @@
 # Imagem base para todos os jobs Spark do lakehouse (gerador, streaming CDF, manutenção).
 #
 # Matriz de versões (verificada nos pom.xml upstream — não alterar isoladamente):
-#   Spark 4.1.2  -> Hadoop 3.4.2 (pom do Spark) -> hadoop-aws 3.4.2 -> AWS SDK v2 bundle 2.29.52 (pom do Hadoop 3.4.2)
+#   Spark 4.1.1  -> Hadoop 3.4.2 (pom do Spark) -> hadoop-aws 3.4.2 -> AWS SDK v2 bundle 2.29.52 (pom do Hadoop 3.4.2)
 #   Delta 4.2.0  -> construído sobre Spark 4.1.x / Scala 2.13 (artefato com sufixo: delta-spark_4.1_2.13)
-#   kafka-clients 3.9.1 + commons-pool2 2.12.1 -> versões esperadas pelo spark-sql-kafka do Spark 4.1.2
+#   kafka-clients 3.9.1 + commons-pool2 2.12.1 -> versões esperadas pelo spark-sql-kafka do Spark 4.1.1
 #
 # Nota Garage: o AWS SDK v2 >= 2.30.0 introduziu checksums de integridade por padrão que quebram
 # S3 não-AWS (mesma classe de problema do Barman). O bundle 2.29.52 (pinado pelo Hadoop 3.4.2)
 # é ANTERIOR a essa mudança — não fazer bump do bundle sem revalidar contra o Garage.
 
-FROM spark:4.1.2-scala2.13-java17-python3-ubuntu
+# ATENCAO: Spark preso em 4.1.1: o Delta 4.2.0 declara pyspark>=4.0.1,<=4.1.1
+# (delta-io/delta#6888). O Spark muda o construtor interno
+# ParquetToSparkSchemaConverter em PATCH releases (4.0.0->4.0.1 e 4.1.1->4.1.2),
+# quebrando o Delta com NoSuchMethodError no caminho do checkpoint (~10 commits).
+# Bump de Spark exige conferir o teto de pyspark no metadata do Delta vigente.
+FROM spark:4.1.1-scala2.13-java17-python3-ubuntu
 
 LABEL org.opencontainers.image.title="spark-delta" \
       org.opencontainers.image.authors="Mimi <fwfurtado@gmail.com>" \
@@ -22,7 +27,7 @@ ENV DELTA_VERSION=4.2.0 \
     DELTA_SPARK_SUFFIX=4.1_2.13 \
     HADOOP_AWS_VERSION=3.4.2 \
     AWS_SDK_V2_VERSION=2.29.52 \
-    SPARK_VERSION=4.1.2 \
+    SPARK_VERSION=4.1.1 \
     KAFKA_CLIENTS_VERSION=3.9.1 \
     COMMONS_POOL2_VERSION=2.12.1
 

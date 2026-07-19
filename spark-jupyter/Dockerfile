@@ -5,7 +5,9 @@
 # jupyterlab 4.6.1: requires_python >=3.10 -- compatível com o Python 3.10 da base
 # (mesma restrição que pinou o numpy em 2.2.6; bump de Python destrava os dois).
 
-FROM ghcr.io/fwfurtado/spark-delta:0.1.0
+# 0.1.1 = build com Spark 4.1.1 (fix Delta 4.2.0 x Spark 4.1.2+);
+# ajustar se o semver do CI atribuir outra tag
+FROM ghcr.io/fwfurtado/spark-delta:0.1.1
 
 LABEL org.opencontainers.image.title="spark-jupyter" \
       org.opencontainers.image.authors="Mimi <fwfurtado@gmail.com>" \
