@@ -7,7 +7,7 @@
 
 # 0.1.1 = build com Spark 4.1.1 (fix Delta 4.2.0 x Spark 4.1.2+);
 # ajustar se o semver do CI atribuir outra tag
-FROM ghcr.io/fwfurtado/spark-delta:0.1.1
+FROM ghcr.io/fwfurtado/spark-delta:0.2.0
 
 LABEL org.opencontainers.image.title="spark-jupyter" \
       org.opencontainers.image.authors="Mimi <fwfurtado@gmail.com>" \
