@@ -49,7 +49,12 @@ RUN set -eux; \
     fetch "${MAVEN}/org/apache/commons/commons-pool2/${COMMONS_POOL2_VERSION}/commons-pool2-${COMMONS_POOL2_VERSION}.jar"; \
     chown spark:spark ./*.jar
 
-# numpy para a amostragem Zipfian do gerador
-RUN pip3 install --no-cache-dir numpy==2.5.1
+# numpy para a amostragem Zipfian do gerador.
+# Pinado em 2.2.6 (não a última do PyPI): a imagem base instala python3 via apt
+# sobre eclipse-temurin:17-jammy (Ubuntu 22.04) => Python 3.10. numpy >= 2.3.0
+# dropou suporte a 3.10 (exige 3.11+), então 2.2.6 é a última versão com wheel
+# compatível. Bump de Python (imagem jammy->noble, ou instalar 3.11 via apt)
+# é pré-requisito para subir o numpy também.
+RUN pip3 install --no-cache-dir numpy==2.2.6
 
 USER spark
