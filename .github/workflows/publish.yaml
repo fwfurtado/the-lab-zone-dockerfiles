@@ -9,6 +9,7 @@ on:
       - 'goose-runner/**'
       - 'lightrag-langfuse/**'
       - 'mcp-server-qdrant/**'
+      - 'lakehouse-jobs/**'
       - 'qa-indexer/**'
       - 'spark-delta/**'
       - 'spark-jupyter/**'
@@ -48,7 +49,7 @@ jobs:
               echo "matrix=[\"$INPUT_APP\"]" >> $GITHUB_OUTPUT
             else
               echo "Disparo manual para TODOS os apps"
-              echo "matrix=[\"dbt-runner\",\"goose-runner\",\"lightrag-langfuse\",\"mcp-server-qdrant\",\"qa-indexer\",\"spark-delta\",\"spark-jupyter\",\"triage-indexer\"]" >> $GITHUB_OUTPUT
+              echo "matrix=[\"dbt-runner\",\"goose-runner\",\"lakehouse-jobs\",\"lightrag-langfuse\",\"mcp-server-qdrant\",\"qa-indexer\",\"spark-delta\",\"spark-jupyter\",\"triage-indexer\"]" >> $GITHUB_OUTPUT
             fi
 
           # 2. SE FOI UM PUSH NORMAL NO GIT:
@@ -62,6 +63,7 @@ jobs:
 
             git diff --name-only $DIFF_REF | grep -q "^dbt-runner/" && APPS+=('"dbt-runner"')
             git diff --name-only $DIFF_REF | grep -q "^goose-runner/" && APPS+=('"goose-runner"')
+            git diff --name-only $DIFF_REF | grep -q "^lakehouse-jobs/" && APPS+=('"lakehouse-jobs"')
             git diff --name-only $DIFF_REF | grep -q "^lightrag-langfuse/" && APPS+=('"lightrag-langfuse"')
             git diff --name-only $DIFF_REF | grep -q "^mcp-server-qdrant/" && APPS+=('"mcp-server-qdrant"')
             git diff --name-only $DIFF_REF | grep -q "^qa-indexer/" && APPS+=('"qa-indexer"')

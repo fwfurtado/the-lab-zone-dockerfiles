@@ -16,8 +16,11 @@ LABEL org.opencontainers.image.title="spark-jupyter" \
 
 USER root
 
-# add "jupyterlab-sql-editor[all]" for magic sql (%%sql) in cells
-RUN pip3 install --no-cache-dir jupyterlab==4.6.1 "jupyterlab-sql-editor[all]" && \
+# jupyterlab-sql-editor SEM o extra [all]: o extra instala pyspark do PyPI --
+# um SEGUNDO Spark (jars proprios, versao divergente) dentro de uma imagem cujo
+# Spark canonico e o /opt/spark. O pyspark dos notebooks vem do PYTHONPATH.
+# O magic %%sparksql ainda exige load_ext no startup do IPython (fica no app).
+RUN pip3 install --no-cache-dir jupyterlab==4.6.1 jupyterlab-sql-editor && \
     mkdir -p /home/spark/notebooks && \
     chown -R spark:spark /home/spark
 
