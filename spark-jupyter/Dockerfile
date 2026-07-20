@@ -16,6 +16,7 @@ LABEL org.opencontainers.image.title="spark-jupyter" \
 
 USER root
 
+# add "jupyterlab-sql-editor[all]" for magic sql (%%sql) in cells
 RUN pip3 install --no-cache-dir jupyterlab==4.6.1 "jupyterlab-sql-editor[all]" && \
     mkdir -p /home/spark/notebooks && \
     chown -R spark:spark /home/spark
