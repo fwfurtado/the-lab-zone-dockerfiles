@@ -30,7 +30,7 @@ INSERT_PCT = float(os.environ.get("INSERT_PCT", "0.15"))
 UPDATE_PCT = float(os.environ.get("UPDATE_PCT", "0.75"))
 DELETE_PCT = float(os.environ.get("DELETE_PCT", "0.10"))
 ZIPF_S = float(os.environ.get("ZIPF_S", "1.1"))
-MAINTENANCE_EVERY = int(os.environ.get("MAINTENANCE_EVERY", "120"))  # rounds (~1h @30s)
+MAINTENANCE_INTERVAL_HOURS = float(os.environ.get("MAINTENANCE_INTERVAL_HOURS", "1"))
 VACUUM_RETAIN_HOURS = int(os.environ.get("VACUUM_RETAIN_HOURS", "6"))
 
 STATUS = ["active", "blocked", "closed"]
@@ -155,6 +155,20 @@ def run_round(spark, round_no: int, max_id: int) -> int:
     return new_max_id
 
 
+def hours_since_last_maintenance(spark) -> float:
+    """Lê a history da tabela p/ achar o último OPTIMIZE. O _delta_log é o relógio
+    PERSISTENTE -- imune a restart do processo (o contador de rounds em memória
+    zerava a cada restart e a manutenção nunca disparava de forma confiável)."""
+    rows = spark.sql(
+        f"SELECT timestamp FROM (DESCRIBE HISTORY delta.`{TABLE_PATH}`) "
+        f"WHERE operation = 'OPTIMIZE' ORDER BY timestamp DESC LIMIT 1"
+    ).collect()
+    if not rows:
+        return float("inf")  # nunca houve manutenção -> roda já
+    last = rows[0]["timestamp"].timestamp()
+    return (time.time() - last) / 3600.0
+
+
 def run_maintenance(spark, round_no: int):
     t0 = time.time()
     spark.sql(f"OPTIMIZE delta.`{TABLE_PATH}`")
@@ -179,13 +193,15 @@ def main():
     ).collect()[0]["m"]
     print(f"GENERATOR_START max_account_id={max_id} batch={BATCH_SIZE} "
           f"mix={INSERT_PCT}/{UPDATE_PCT}/{DELETE_PCT} zipf_s={ZIPF_S} "
-          f"maintenance_every={MAINTENANCE_EVERY} vacuum_retain_h={VACUUM_RETAIN_HOURS}")
+          f"maintenance_interval_h={MAINTENANCE_INTERVAL_HOURS} vacuum_retain_h={VACUUM_RETAIN_HOURS}")
 
     round_no = 0
     while True:
         round_no += 1
         max_id = run_round(spark, round_no, max_id)
-        if round_no % MAINTENANCE_EVERY == 0:
+        # gatilho por RELÓGIO PERSISTENTE: sobrevive a restart do driver (o operator
+        # ressubmete o app -- visto 11x em 39h; contador em memória perdia a conta)
+        if hours_since_last_maintenance(spark) >= MAINTENANCE_INTERVAL_HOURS:
             run_maintenance(spark, round_no)
         time.sleep(SLEEP_SECONDS)
 

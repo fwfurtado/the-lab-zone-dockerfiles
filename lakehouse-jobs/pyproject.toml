@@ -1,6 +1,6 @@
 [project]
 name = "lakehouse-jobs"
-version = "0.2.0"
+version = "0.3.0"
 description = "Jobs Spark do lakehouse (gerador, streaming CDF, migrations)"
 requires-python = ">=3.10"
 dependencies = [
