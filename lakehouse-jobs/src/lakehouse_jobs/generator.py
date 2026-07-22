@@ -159,10 +159,17 @@ def hours_since_last_maintenance(spark) -> float:
     """Lê a history da tabela p/ achar o último OPTIMIZE. O _delta_log é o relógio
     PERSISTENTE -- imune a restart do processo (o contador de rounds em memória
     zerava a cada restart e a manutenção nunca disparava de forma confiável)."""
-    rows = spark.sql(
-        f"SELECT timestamp FROM (DESCRIBE HISTORY delta.`{TABLE_PATH}`) "
-        f"WHERE operation = 'OPTIMIZE' ORDER BY timestamp DESC LIMIT 1"
-    ).collect()
+    # DESCRIBE HISTORY não pode ser subquery (é comando utilitário, não relação) --
+    # coletar o DataFrame e filtrar/ordenar no lado Python/DataFrame API
+    from pyspark.sql import functions as F
+
+    rows = (
+        spark.sql(f"DESCRIBE HISTORY delta.`{TABLE_PATH}`")
+        .filter(F.col("operation") == "OPTIMIZE")
+        .orderBy(F.col("timestamp").desc())
+        .limit(1)
+        .collect()
+    )
     if not rows:
         return float("inf")  # nunca houve manutenção -> roda já
     last = rows[0]["timestamp"].timestamp()
